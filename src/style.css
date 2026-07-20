@@ -332,9 +332,13 @@ textarea {
 /*------------------------------------------------*/
 
 .counter {
-  padding: 6px 10px;
+  flex-shrink: 0;
+  min-width: 125px;
+  padding: 6px 12px;
   color: #c0c0c0;
   font-size: 0.85rem;
+  text-align: center;
+  white-space: nowrap;
   background: #202020;
   border-radius: 999px;
 }
