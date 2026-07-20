@@ -6,7 +6,7 @@ export default defineConfig({
 
   plugins: [
     VitePWA({
-      registerType: "autoUpdate",
+      registerType: "prompt",
 
       includeAssets: [
         "favicon.png",
