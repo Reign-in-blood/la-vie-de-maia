@@ -5,7 +5,7 @@ import "./pwa-update";
 /* Types                                          */
 /*------------------------------------------------*/
 
-type Category =
+type ObservationCategory =
   | "Propreté"
   | "Sommeil"
   | "Santé"
@@ -14,12 +14,14 @@ type Category =
   | "Transmission"
   | "Autre";
 
+type ViewCategory = ObservationCategory | "Tout";
+
 type Observation = {
   id: string;
   observedAt: string;
   createdAt: string;
   modifiedAt?: string;
-  category: Category;
+  category: ObservationCategory;
   context: string;
   fact: string;
   exactWords: string;
@@ -41,6 +43,12 @@ type MergeResult = {
   unchanged: number;
 };
 
+type FilterResult = {
+  scopeTotal: number;
+  filteredObservations: Observation[];
+  statusMessage: string;
+};
+
 /*------------------------------------------------*/
 /* Constantes                                     */
 /*------------------------------------------------*/
@@ -48,7 +56,7 @@ type MergeResult = {
 const STORAGE_KEY = "childtrack_observations_v1";
 const MAX_IMPORT_SIZE = 10 * 1024 * 1024;
 
-const categories: Category[] = [
+const categories: ObservationCategory[] = [
   "Propreté",
   "Sommeil",
   "Santé",
@@ -56,6 +64,11 @@ const categories: Category[] = [
   "Alimentation",
   "Transmission",
   "Autre",
+];
+
+const navigationCategories: ViewCategory[] = [
+  "Tout",
+  ...categories,
 ];
 
 document.title = "La vie de Maia 🐝";
@@ -72,18 +85,18 @@ function loadObservations(): Observation[] {
       return [];
     }
 
-    const parsedData = JSON.parse(storedData);
+    const parsedData: unknown = JSON.parse(storedData);
 
-    return Array.isArray(parsedData) ? parsedData : [];
+    return Array.isArray(parsedData)
+      ? parsedData.filter(isObservation)
+      : [];
   } catch (error) {
     console.error("Impossible de lire les observations :", error);
     return [];
   }
 }
 
-function saveObservations(
-  observationsToSave: Observation[],
-): void {
+function saveObservations(observationsToSave: Observation[]): void {
   localStorage.setItem(
     STORAGE_KEY,
     JSON.stringify(observationsToSave),
@@ -99,49 +112,28 @@ function createId(): string {
     return crypto.randomUUID();
   }
 
-  return `${Date.now()}-${Math.random()
-    .toString(16)
-    .slice(2)}`;
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function getDateTimeLocalValue(
-  dateValue?: string,
-): string {
-  const date = dateValue
-    ? new Date(dateValue)
-    : new Date();
+function getDateTimeLocalValue(dateValue?: string): string {
+  const date = dateValue ? new Date(dateValue) : new Date();
+  const timezoneOffset = date.getTimezoneOffset() * 60_000;
 
-  const timezoneOffset =
-    date.getTimezoneOffset() * 60_000;
-
-  return new Date(
-    date.getTime() - timezoneOffset,
-  )
+  return new Date(date.getTime() - timezoneOffset)
     .toISOString()
     .slice(0, 16);
 }
 
-function getLocalDateKey(
-  dateValue: string,
-): string {
+function getLocalDateKey(dateValue: string): string {
   const date = new Date(dateValue);
-
   const year = date.getFullYear();
-
-  const month = String(
-    date.getMonth() + 1,
-  ).padStart(2, "0");
-
-  const day = String(
-    date.getDate(),
-  ).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
 }
 
-function parseLocalDate(
-  dateValue: string,
-): Date {
+function parseLocalDate(dateValue: string): Date {
   const [year, month, day] = dateValue
     .split("-")
     .map((part) => Number(part));
@@ -149,9 +141,7 @@ function parseLocalDate(
   return new Date(year, month - 1, day);
 }
 
-function getObservationDayTimestamp(
-  dateValue: string,
-): number {
+function getObservationDayTimestamp(dateValue: string): number {
   const date = new Date(dateValue);
 
   return new Date(
@@ -164,42 +154,31 @@ function getObservationDayTimestamp(
 function getObservationRevisionTimestamp(
   observation: Observation,
 ): number {
-  const revisionDate =
-    observation.modifiedAt ??
-    observation.createdAt;
-
+  const revisionDate = observation.modifiedAt ?? observation.createdAt;
   return new Date(revisionDate).getTime();
 }
 
-function formatDate(
-  dateValue: string,
-): string {
+function formatDate(dateValue: string): string {
   return new Intl.DateTimeFormat("fr-FR", {
     dateStyle: "full",
     timeStyle: "short",
   }).format(new Date(dateValue));
 }
 
-function formatShortDate(
-  dateValue: string,
-): string {
+function formatShortDate(dateValue: string): string {
   return new Intl.DateTimeFormat("fr-FR", {
     dateStyle: "short",
     timeStyle: "short",
   }).format(new Date(dateValue));
 }
 
-function formatSearchDate(
-  dateValue: string,
-): string {
+function formatSearchDate(dateValue: string): string {
   return new Intl.DateTimeFormat("fr-FR", {
     dateStyle: "long",
   }).format(parseLocalDate(dateValue));
 }
 
-function normaliseText(
-  value: string,
-): string {
+function normaliseText(value: string): string {
   return value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -207,9 +186,7 @@ function normaliseText(
     .trim();
 }
 
-function escapeHtml(
-  value: string,
-): string {
+function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -218,46 +195,40 @@ function escapeHtml(
     .replaceAll("'", "&#039;");
 }
 
-function isValidDate(
-  value: string,
-): boolean {
-  return !Number.isNaN(
-    new Date(value).getTime(),
-  );
+function isValidDate(value: string): boolean {
+  return !Number.isNaN(new Date(value).getTime());
 }
 
-function isCategory(
+function isObservationCategory(
   value: unknown,
-): value is Category {
+): value is ObservationCategory {
   return (
     typeof value === "string" &&
-    categories.includes(value as Category)
+    categories.includes(value as ObservationCategory)
   );
 }
 
-function isObservation(
-  value: unknown,
-): value is Observation {
-  if (
-    typeof value !== "object" ||
-    value === null
-  ) {
+function isViewCategory(value: unknown): value is ViewCategory {
+  return (
+    typeof value === "string" &&
+    navigationCategories.includes(value as ViewCategory)
+  );
+}
+
+function isObservation(value: unknown): value is Observation {
+  if (typeof value !== "object" || value === null) {
     return false;
   }
 
-  const candidate =
-    value as Partial<Observation>;
+  const candidate = value as Partial<Observation>;
 
   return (
     typeof candidate.id === "string" &&
     candidate.id.length > 0 &&
-
     typeof candidate.observedAt === "string" &&
     isValidDate(candidate.observedAt) &&
-
     typeof candidate.createdAt === "string" &&
     isValidDate(candidate.createdAt) &&
-
     (
       candidate.modifiedAt === undefined ||
       (
@@ -265,13 +236,21 @@ function isObservation(
         isValidDate(candidate.modifiedAt)
       )
     ) &&
-
-    isCategory(candidate.category) &&
-
+    isObservationCategory(candidate.category) &&
     typeof candidate.context === "string" &&
     typeof candidate.fact === "string" &&
     typeof candidate.exactWords === "string" &&
     typeof candidate.interpretation === "string"
+  );
+}
+
+function sortObservations(
+  observationsToSort: Observation[],
+): Observation[] {
+  return [...observationsToSort].sort(
+    (first, second) =>
+      new Date(second.observedAt).getTime() -
+      new Date(first.observedAt).getTime(),
   );
 }
 
@@ -282,46 +261,24 @@ function isObservation(
 function deduplicateObservations(
   observationsToDeduplicate: Observation[],
 ): Observation[] {
-  const observationsById =
-    new Map<string, Observation>();
+  const observationsById = new Map<string, Observation>();
 
-  for (
-    const observation
-    of observationsToDeduplicate
-  ) {
-    const existingObservation =
-      observationsById.get(observation.id);
-
-    if (!existingObservation) {
-      observationsById.set(
-        observation.id,
-        observation,
-      );
-
-      continue;
-    }
+  for (const observation of observationsToDeduplicate) {
+    const existingObservation = observationsById.get(observation.id);
 
     if (
-      getObservationRevisionTimestamp(
-        observation,
-      ) >
-      getObservationRevisionTimestamp(
-        existingObservation,
-      )
+      !existingObservation ||
+      getObservationRevisionTimestamp(observation) >
+        getObservationRevisionTimestamp(existingObservation)
     ) {
-      observationsById.set(
-        observation.id,
-        observation,
-      );
+      observationsById.set(observation.id, observation);
     }
   }
 
   return [...observationsById.values()];
 }
 
-function parseBackupFile(
-  content: string,
-): Observation[] {
+function parseBackupFile(content: string): Observation[] {
   let parsedData: unknown;
 
   try {
@@ -332,28 +289,18 @@ function parseBackupFile(
     );
   }
 
-  if (
-    typeof parsedData !== "object" ||
-    parsedData === null
-  ) {
+  if (typeof parsedData !== "object" || parsedData === null) {
     throw new Error(
       "Le fichier ne correspond pas à une sauvegarde valide.",
     );
   }
 
-  const backup =
-    parsedData as Partial<BackupFile>;
-
-  const acceptedApplicationNames = [
-    "La vie de Maia",
-    "ChildTrack",
-  ];
+  const backup = parsedData as Partial<BackupFile>;
+  const acceptedApplicationNames = ["La vie de Maia", "ChildTrack"];
 
   if (
     typeof backup.application !== "string" ||
-    !acceptedApplicationNames.includes(
-      backup.application,
-    )
+    !acceptedApplicationNames.includes(backup.application)
   ) {
     throw new Error(
       "Cette sauvegarde ne provient pas de La vie de Maia.",
@@ -372,80 +319,42 @@ function parseBackupFile(
     );
   }
 
-  if (
-    !backup.observations.every(
-      isObservation,
-    )
-  ) {
+  if (!backup.observations.every(isObservation)) {
     throw new Error(
       "Certaines observations du fichier sont invalides.",
     );
   }
 
-  return deduplicateObservations(
-    backup.observations,
-  );
+  return deduplicateObservations(backup.observations);
 }
 
 function mergeObservations(
   existingObservations: Observation[],
   importedObservations: Observation[],
 ): MergeResult {
-  const mergedById =
-    new Map<string, Observation>();
-
+  const mergedById = new Map<string, Observation>();
   let added = 0;
   let updated = 0;
   let unchanged = 0;
 
-  for (
-    const observation
-    of existingObservations
-  ) {
-    mergedById.set(
-      observation.id,
-      observation,
-    );
+  for (const observation of existingObservations) {
+    mergedById.set(observation.id, observation);
   }
 
-  for (
-    const importedObservation
-    of importedObservations
-  ) {
-    const existingObservation =
-      mergedById.get(
-        importedObservation.id,
-      );
+  for (const importedObservation of importedObservations) {
+    const existingObservation = mergedById.get(importedObservation.id);
 
     if (!existingObservation) {
-      mergedById.set(
-        importedObservation.id,
-        importedObservation,
-      );
-
+      mergedById.set(importedObservation.id, importedObservation);
       added += 1;
       continue;
     }
 
-    const importedRevision =
-      getObservationRevisionTimestamp(
-        importedObservation,
-      );
-
-    const existingRevision =
-      getObservationRevisionTimestamp(
-        existingObservation,
-      );
-
     if (
-      importedRevision >
-      existingRevision
+      getObservationRevisionTimestamp(importedObservation) >
+      getObservationRevisionTimestamp(existingObservation)
     ) {
-      mergedById.set(
-        importedObservation.id,
-        importedObservation,
-      );
-
+      mergedById.set(importedObservation.id, importedObservation);
       updated += 1;
     } else {
       unchanged += 1;
@@ -453,9 +362,7 @@ function mergeObservations(
   }
 
   return {
-    observations: [
-      ...mergedById.values(),
-    ],
+    observations: [...mergedById.values()],
     added,
     updated,
     unchanged,
@@ -467,28 +374,19 @@ function mergeObservations(
 /*------------------------------------------------*/
 
 let observations = loadObservations();
-
-let activeCategory: Category =
-  "Propreté";
-
-let editingObservationId:
-  string | null = null;
-
-let pendingImportedObservations:
-  Observation[] = [];
+let activeCategory: ViewCategory = "Tout";
+let editingObservationId: string | null = null;
+let formReturnCategory: ViewCategory | null = null;
+let pendingImportedObservations: Observation[] = [];
 
 /*------------------------------------------------*/
 /* Interface                                      */
 /*------------------------------------------------*/
 
-document.querySelector<HTMLDivElement>(
-  "#app",
-)!.innerHTML = `
+document.querySelector<HTMLDivElement>("#app")!.innerHTML = `
   <header class="app-header">
     <div class="app-title">
-      <p class="app-kicker">
-        Journal d’observations
-      </p>
+      <p class="app-kicker">Journal d’observations</p>
 
       <h1>
         La vie de Maia
@@ -542,13 +440,8 @@ document.querySelector<HTMLDivElement>(
     <section class="tools-section">
       <div class="section-heading">
         <div>
-          <p class="section-kicker">
-            Recherche
-          </p>
-
-          <h2>
-            Rechercher dans la catégorie
-          </h2>
+          <p class="section-kicker">Recherche</p>
+          <h2 id="search-scope-title"></h2>
         </div>
 
         <button
@@ -594,13 +487,8 @@ document.querySelector<HTMLDivElement>(
     >
       <div class="section-heading">
         <div>
-          <p class="section-kicker">
-            Saisie
-          </p>
-
-          <h2 id="form-title">
-            Ajouter une observation
-          </h2>
+          <p class="section-kicker">Saisie</p>
+          <h2 id="form-title">Ajouter une observation</h2>
         </div>
 
         <button
@@ -653,37 +541,16 @@ document.querySelector<HTMLDivElement>(
             id="context-select"
             name="context"
           >
-            <option value="">
-              Non précisé
-            </option>
-
-            <option value="Maison">
-              Maison
-            </option>
-
+            <option value="">Non précisé</option>
+            <option value="Maison">Maison</option>
             <option value="Assistante maternelle">
               Assistante maternelle
             </option>
-
-            <option value="Avant un DVH">
-              Avant un DVH
-            </option>
-
-            <option value="Retour de DVH">
-              Retour de DVH
-            </option>
-
-            <option value="Chez le médecin">
-              Chez le médecin
-            </option>
-
-            <option value="Extérieur">
-              Extérieur
-            </option>
-
-            <option value="Autre">
-              Autre
-            </option>
+            <option value="Avant un DVH">Avant un DVH</option>
+            <option value="Retour de DVH">Retour de DVH</option>
+            <option value="Chez le médecin">Chez le médecin</option>
+            <option value="Extérieur">Extérieur</option>
+            <option value="Autre">Autre</option>
           </select>
         </label>
 
@@ -744,12 +611,12 @@ document.querySelector<HTMLDivElement>(
     <section class="timeline-section">
       <div class="section-heading">
         <div>
-          <p class="section-kicker">
-            Historique par catégorie
-          </p>
+          <p
+            id="timeline-kicker"
+            class="section-kicker"
+          ></p>
 
-          <h2 id="current-category-title">
-          </h2>
+          <h2 id="current-category-title"></h2>
         </div>
 
         <span
@@ -773,13 +640,8 @@ document.querySelector<HTMLDivElement>(
     aria-labelledby="import-dialog-title"
   >
     <div class="import-dialog-panel">
-      <p class="section-kicker">
-        Restauration
-      </p>
-
-      <h2 id="import-dialog-title">
-        Importer la sauvegarde
-      </h2>
+      <p class="section-kicker">Restauration</p>
+      <h2 id="import-dialog-title">Importer la sauvegarde</h2>
 
       <p
         id="import-summary"
@@ -793,17 +655,13 @@ document.querySelector<HTMLDivElement>(
 
       <div class="import-warning">
         <strong>Fusionner</strong>
-
         <span>
-          Conserve les observations déjà
-          présentes et ajoute les nouvelles.
+          Conserve les observations déjà présentes et ajoute les nouvelles.
         </span>
 
         <strong>Remplacer</strong>
-
         <span>
-          Supprime les données actuelles
-          avant de restaurer le fichier.
+          Supprime les données actuelles avant de restaurer le fichier.
         </span>
       </div>
 
@@ -840,183 +698,155 @@ document.querySelector<HTMLDivElement>(
 /* Références DOM                                 */
 /*------------------------------------------------*/
 
-const formSection =
-  document.querySelector<HTMLElement>(
-    "#observation-form-section",
-  )!;
+const formSection = document.querySelector<HTMLElement>(
+  "#observation-form-section",
+)!;
 
-const observationForm =
-  document.querySelector<HTMLFormElement>(
-    "#observation-form",
-  )!;
+const observationForm = document.querySelector<HTMLFormElement>(
+  "#observation-form",
+)!;
 
-const formTitle =
-  document.querySelector<HTMLHeadingElement>(
-    "#form-title",
-  )!;
+const formTitle = document.querySelector<HTMLHeadingElement>(
+  "#form-title",
+)!;
 
-const submitFormButton =
-  document.querySelector<HTMLButtonElement>(
-    "#submit-form-button",
-  )!;
+const submitFormButton = document.querySelector<HTMLButtonElement>(
+  "#submit-form-button",
+)!;
 
-const observationList =
-  document.querySelector<HTMLDivElement>(
-    "#observation-list",
-  )!;
+const observationList = document.querySelector<HTMLDivElement>(
+  "#observation-list",
+)!;
 
-const observationCount =
-  document.querySelector<HTMLSpanElement>(
-    "#observation-count",
-  )!;
+const observationCount = document.querySelector<HTMLSpanElement>(
+  "#observation-count",
+)!;
 
-const observedAtInput =
-  document.querySelector<HTMLInputElement>(
-    "#observed-at",
-  )!;
+const observedAtInput = document.querySelector<HTMLInputElement>(
+  "#observed-at",
+)!;
 
-const categorySelect =
-  document.querySelector<HTMLSelectElement>(
-    "#category-select",
-  )!;
+const categorySelect = document.querySelector<HTMLSelectElement>(
+  "#category-select",
+)!;
 
-const contextSelect =
-  document.querySelector<HTMLSelectElement>(
-    "#context-select",
-  )!;
+const contextSelect = document.querySelector<HTMLSelectElement>(
+  "#context-select",
+)!;
 
-const factInput =
-  document.querySelector<HTMLTextAreaElement>(
-    "#fact-input",
-  )!;
+const factInput = document.querySelector<HTMLTextAreaElement>(
+  "#fact-input",
+)!;
 
-const exactWordsInput =
-  document.querySelector<HTMLTextAreaElement>(
-    "#exact-words-input",
-  )!;
+const exactWordsInput = document.querySelector<HTMLTextAreaElement>(
+  "#exact-words-input",
+)!;
 
-const interpretationInput =
-  document.querySelector<HTMLTextAreaElement>(
-    "#interpretation-input",
-  )!;
+const interpretationInput = document.querySelector<HTMLTextAreaElement>(
+  "#interpretation-input",
+)!;
 
-const categoryNavigation =
-  document.querySelector<HTMLElement>(
-    "#category-navigation",
-  )!;
+const categoryNavigation = document.querySelector<HTMLElement>(
+  "#category-navigation",
+)!;
 
-const currentCategoryTitle =
-  document.querySelector<HTMLHeadingElement>(
-    "#current-category-title",
-  )!;
+const currentCategoryTitle = document.querySelector<HTMLHeadingElement>(
+  "#current-category-title",
+)!;
 
-const searchDateInput =
-  document.querySelector<HTMLInputElement>(
-    "#search-date",
-  )!;
+const timelineKicker = document.querySelector<HTMLParagraphElement>(
+  "#timeline-kicker",
+)!;
 
-const searchKeywordInput =
-  document.querySelector<HTMLInputElement>(
-    "#search-keyword",
-  )!;
+const searchScopeTitle = document.querySelector<HTMLHeadingElement>(
+  "#search-scope-title",
+)!;
 
-const searchStatus =
-  document.querySelector<HTMLParagraphElement>(
-    "#search-status",
-  )!;
+const searchDateInput = document.querySelector<HTMLInputElement>(
+  "#search-date",
+)!;
 
-const exportButton =
-  document.querySelector<HTMLButtonElement>(
-    "#export-button",
-  )!;
+const searchKeywordInput = document.querySelector<HTMLInputElement>(
+  "#search-keyword",
+)!;
 
-const importButton =
-  document.querySelector<HTMLButtonElement>(
-    "#import-button",
-  )!;
+const searchStatus = document.querySelector<HTMLParagraphElement>(
+  "#search-status",
+)!;
 
-const importFileInput =
-  document.querySelector<HTMLInputElement>(
-    "#import-file-input",
-  )!;
+const exportButton = document.querySelector<HTMLButtonElement>(
+  "#export-button",
+)!;
 
-const importDialog =
-  document.querySelector<HTMLDivElement>(
-    "#import-dialog",
-  )!;
+const importButton = document.querySelector<HTMLButtonElement>(
+  "#import-button",
+)!;
 
-const importSummary =
-  document.querySelector<HTMLParagraphElement>(
-    "#import-summary",
-  )!;
+const importFileInput = document.querySelector<HTMLInputElement>(
+  "#import-file-input",
+)!;
 
-const importDetails =
-  document.querySelector<HTMLDivElement>(
-    "#import-details",
-  )!;
+const importDialog = document.querySelector<HTMLDivElement>(
+  "#import-dialog",
+)!;
+
+const importSummary = document.querySelector<HTMLParagraphElement>(
+  "#import-summary",
+)!;
+
+const importDetails = document.querySelector<HTMLDivElement>(
+  "#import-details",
+)!;
 
 /*------------------------------------------------*/
 /* Catégories                                     */
 /*------------------------------------------------*/
 
-function getCategoryCount(
-  category: Category,
-): number {
+function getCategoryCount(category: ViewCategory): number {
+  if (category === "Tout") {
+    return observations.length;
+  }
+
   return observations.filter(
-    (observation) =>
-      observation.category === category,
+    (observation) => observation.category === category,
   ).length;
 }
 
 function renderCategoryNavigation(): void {
-  categoryNavigation.innerHTML =
-    categories
-      .map((category) => {
-        const isActive =
-          category === activeCategory;
+  categoryNavigation.innerHTML = navigationCategories
+    .map((category) => {
+      const isActive = category === activeCategory;
+      const count = getCategoryCount(category);
 
-        const count =
-          getCategoryCount(category);
-
-        return `
-          <button
-            class="category-button ${
-              isActive ? "active" : ""
-            }"
-            type="button"
-            data-category="${category}"
-            aria-pressed="${isActive}"
-          >
-            <span>${category}</span>
-
-            <span class="category-count">
-              ${count}
-            </span>
-          </button>
-        `;
-      })
-      .join("");
+      return `
+        <button
+          class="category-button ${isActive ? "active" : ""}"
+          type="button"
+          data-category="${category}"
+          aria-pressed="${isActive}"
+        >
+          <span>${category}</span>
+          <span class="category-count">${count}</span>
+        </button>
+      `;
+    })
+    .join("");
 
   document
-    .querySelectorAll<HTMLButtonElement>(
-      "[data-category]",
-    )
+    .querySelectorAll<HTMLButtonElement>("[data-category]")
     .forEach((button) => {
-      button.addEventListener(
-        "click",
-        () => {
-          const category = button.dataset.category as Category | undefined;
+      button.addEventListener("click", () => {
+        const category = button.dataset.category;
 
-          if (!category) {
-            return;
-          }
+        if (!isViewCategory(category)) {
+          return;
+        }
 
-          activeCategory = category;
-
-          renderCategoryNavigation();
-          renderObservations();
-        },
-      );
+        activeCategory = category;
+        clearSearchFilters();
+        renderCategoryNavigation();
+        renderObservations();
+      });
     });
 }
 
@@ -1026,82 +856,42 @@ function renderCategoryNavigation(): void {
 
 function openNewObservationForm(): void {
   editingObservationId = null;
-
+  formReturnCategory = activeCategory;
   observationForm.reset();
 
-  formTitle.textContent =
-    "Ajouter une observation";
-
-  submitFormButton.textContent =
-    "Enregistrer";
-
-  observedAtInput.value =
-    getDateTimeLocalValue();
-
+  formTitle.textContent = "Ajouter une observation";
+  submitFormButton.textContent = "Enregistrer";
+  observedAtInput.value = getDateTimeLocalValue();
   categorySelect.value =
-    activeCategory;
+    activeCategory === "Tout" ? "Propreté" : activeCategory;
 
-  formSection.classList.remove(
-    "hidden",
-  );
-
+  formSection.classList.remove("hidden");
   formSection.scrollIntoView({
     behavior: "smooth",
     block: "start",
   });
 }
 
-function openEditObservationForm(
-  id: string,
-): void {
-  const observation =
-    observations.find(
-      (item) => item.id === id,
-    );
+function openEditObservationForm(id: string): void {
+  const observation = observations.find((item) => item.id === id);
 
   if (!observation) {
     return;
   }
 
-  editingObservationId =
-    observation.id;
+  editingObservationId = observation.id;
+  formReturnCategory = activeCategory;
 
-  activeCategory =
-    observation.category;
+  formTitle.textContent = "Modifier l’observation";
+  submitFormButton.textContent = "Enregistrer les modifications";
+  observedAtInput.value = getDateTimeLocalValue(observation.observedAt);
+  categorySelect.value = observation.category;
+  contextSelect.value = observation.context;
+  factInput.value = observation.fact;
+  exactWordsInput.value = observation.exactWords;
+  interpretationInput.value = observation.interpretation;
 
-  formTitle.textContent =
-    "Modifier l’observation";
-
-  submitFormButton.textContent =
-    "Enregistrer les modifications";
-
-  observedAtInput.value =
-    getDateTimeLocalValue(
-      observation.observedAt,
-    );
-
-  categorySelect.value =
-    observation.category;
-
-  contextSelect.value =
-    observation.context;
-
-  factInput.value =
-    observation.fact;
-
-  exactWordsInput.value =
-    observation.exactWords;
-
-  interpretationInput.value =
-    observation.interpretation;
-
-  renderCategoryNavigation();
-  renderObservations();
-
-  formSection.classList.remove(
-    "hidden",
-  );
-
+  formSection.classList.remove("hidden");
   formSection.scrollIntoView({
     behavior: "smooth",
     block: "start",
@@ -1110,50 +900,35 @@ function openEditObservationForm(
 
 function closeForm(): void {
   editingObservationId = null;
-
+  formReturnCategory = null;
   observationForm.reset();
-
-  formTitle.textContent =
-    "Ajouter une observation";
-
-  submitFormButton.textContent =
-    "Enregistrer";
-
-  formSection.classList.add(
-    "hidden",
-  );
+  formTitle.textContent = "Ajouter une observation";
+  submitFormButton.textContent = "Enregistrer";
+  formSection.classList.add("hidden");
 }
 
 /*------------------------------------------------*/
 /* Suppression                                    */
 /*------------------------------------------------*/
 
-function deleteObservation(
-  id: string,
-): void {
-  const confirmed =
-    window.confirm(
-      "Supprimer définitivement cette observation ?",
-    );
+function deleteObservation(id: string): void {
+  const confirmed = window.confirm(
+    "Supprimer définitivement cette observation ?",
+  );
 
   if (!confirmed) {
     return;
   }
 
-  observations =
-    observations.filter(
-      (observation) =>
-        observation.id !== id,
-    );
+  observations = observations.filter(
+    (observation) => observation.id !== id,
+  );
 
   saveObservations(observations);
-
   renderCategoryNavigation();
   renderObservations();
 
-  if (
-    editingObservationId === id
-  ) {
+  if (editingObservationId === id) {
     closeForm();
   }
 }
@@ -1170,169 +945,106 @@ function observationMatchesKeyword(
     return true;
   }
 
-  const searchableText =
-    normaliseText(
-      [
-        observation.context,
-        observation.fact,
-        observation.exactWords,
-        observation.interpretation,
-      ].join(" "),
-    );
+  const searchableText = normaliseText(
+    [
+      observation.category,
+      observation.context,
+      observation.fact,
+      observation.exactWords,
+      observation.interpretation,
+    ].join(" "),
+  );
 
-  return searchableText.includes(
-    keyword,
+  return searchableText.includes(keyword);
+}
+
+function getScopedObservations(): Observation[] {
+  if (activeCategory === "Tout") {
+    return sortObservations(observations);
+  }
+
+  return sortObservations(
+    observations.filter(
+      (observation) => observation.category === activeCategory,
+    ),
   );
 }
 
-function getFilteredObservations(): {
-  categoryTotal: number;
-  filteredObservations: Observation[];
-  statusMessage: string;
-} {
-  const categoryObservations =
-    observations
-      .filter(
-        (observation) =>
-          observation.category ===
-          activeCategory,
-      )
-      .sort(
-        (first, second) =>
-          new Date(
-            second.observedAt,
-          ).getTime() -
-          new Date(
-            first.observedAt,
-          ).getTime(),
-      );
+function getFilteredObservations(): FilterResult {
+  const scopedObservations = getScopedObservations();
+  const keyword = normaliseText(searchKeywordInput.value);
 
-  const keyword =
-    normaliseText(
-      searchKeywordInput.value,
-    );
+  const keywordFiltered = scopedObservations.filter((observation) =>
+    observationMatchesKeyword(observation, keyword),
+  );
 
-  const keywordFiltered =
-    categoryObservations.filter(
-      (observation) =>
-        observationMatchesKeyword(
-          observation,
-          keyword,
-        ),
-    );
-
-  const searchedDate =
-    searchDateInput.value;
+  const searchedDate = searchDateInput.value;
 
   if (!searchedDate) {
-    const statusMessage =
-      keyword
-        ? `${keywordFiltered.length} résultat(s) contenant « ${searchKeywordInput.value.trim()} ».`
-        : "";
-
     return {
-      categoryTotal:
-        categoryObservations.length,
-
-      filteredObservations:
-        keywordFiltered,
-
-      statusMessage,
+      scopeTotal: scopedObservations.length,
+      filteredObservations: keywordFiltered,
+      statusMessage: keyword
+        ? `${keywordFiltered.length} résultat(s) contenant « ${searchKeywordInput.value.trim()} ».`
+        : "",
     };
   }
 
-  const exactDateObservations =
-    keywordFiltered.filter(
-      (observation) =>
-        getLocalDateKey(
-          observation.observedAt,
-        ) === searchedDate,
-    );
+  const exactDateObservations = keywordFiltered.filter(
+    (observation) =>
+      getLocalDateKey(observation.observedAt) === searchedDate,
+  );
 
-  if (
-    exactDateObservations.length > 0
-  ) {
+  if (exactDateObservations.length > 0) {
     return {
-      categoryTotal:
-        categoryObservations.length,
-
-      filteredObservations:
-        exactDateObservations,
-
+      scopeTotal: scopedObservations.length,
+      filteredObservations: exactDateObservations,
       statusMessage:
         `${exactDateObservations.length} observation(s) trouvée(s) ` +
         `le ${formatSearchDate(searchedDate)}.`,
     };
   }
 
-  if (
-    keywordFiltered.length === 0
-  ) {
+  if (keywordFiltered.length === 0) {
     return {
-      categoryTotal:
-        categoryObservations.length,
-
+      scopeTotal: scopedObservations.length,
       filteredObservations: [],
-
       statusMessage:
         keyword.length > 0
           ? "Aucune observation ne correspond à cette date et à ce mot-clé."
-          : "Aucune observation disponible dans cette catégorie.",
+          : activeCategory === "Tout"
+            ? "Aucune observation disponible."
+            : "Aucune observation disponible dans cette catégorie.",
     };
   }
 
-  const searchedTimestamp =
-    parseLocalDate(
-      searchedDate,
-    ).getTime();
-
+  const searchedTimestamp = parseLocalDate(searchedDate).getTime();
   let nearestDateKey = "";
+  let nearestDistance = Number.POSITIVE_INFINITY;
 
-  let nearestDistance =
-    Number.POSITIVE_INFINITY;
+  for (const observation of keywordFiltered) {
+    const observationTimestamp = getObservationDayTimestamp(
+      observation.observedAt,
+    );
 
-  for (
-    const observation
-    of keywordFiltered
-  ) {
-    const observationTimestamp =
-      getObservationDayTimestamp(
-        observation.observedAt,
-      );
+    const distance = Math.abs(
+      observationTimestamp - searchedTimestamp,
+    );
 
-    const distance =
-      Math.abs(
-        observationTimestamp -
-        searchedTimestamp,
-      );
-
-    if (
-      distance < nearestDistance
-    ) {
+    if (distance < nearestDistance) {
       nearestDistance = distance;
-
-      nearestDateKey =
-        getLocalDateKey(
-          observation.observedAt,
-        );
+      nearestDateKey = getLocalDateKey(observation.observedAt);
     }
   }
 
-  const nearestObservations =
-    keywordFiltered.filter(
-      (observation) =>
-        getLocalDateKey(
-          observation.observedAt,
-        ) === nearestDateKey,
-    );
+  const nearestObservations = keywordFiltered.filter(
+    (observation) =>
+      getLocalDateKey(observation.observedAt) === nearestDateKey,
+  );
 
   return {
-    categoryTotal:
-      categoryObservations.length,
-
-    filteredObservations:
-      nearestObservations,
-
+    scopeTotal: scopedObservations.length,
+    filteredObservations: nearestObservations,
     statusMessage:
       `Aucune observation le ${formatSearchDate(searchedDate)}. ` +
       `Affichage de la date la plus proche : ` +
@@ -1344,204 +1056,182 @@ function getFilteredObservations(): {
 /* Affichage des observations                     */
 /*------------------------------------------------*/
 
+function getObservationSubtitle(observation: Observation): string {
+  if (activeCategory === "Tout") {
+    const context = observation.context
+      ? ` · ${escapeHtml(observation.context)}`
+      : "";
+
+    return `
+      <p class="context">
+        <strong>${escapeHtml(observation.category)}</strong>${context}
+      </p>
+    `;
+  }
+
+  if (!observation.context) {
+    return "";
+  }
+
+  return `
+    <p class="context">
+      ${escapeHtml(observation.context)}
+    </p>
+  `;
+}
+
 function renderObservations(): void {
   const {
-    categoryTotal,
+    scopeTotal,
     filteredObservations,
     statusMessage,
   } = getFilteredObservations();
 
-  currentCategoryTitle.textContent =
-    activeCategory;
+  const isAllView = activeCategory === "Tout";
 
-  searchStatus.textContent =
-    statusMessage;
+  currentCategoryTitle.textContent = isAllView
+    ? "Toutes les observations"
+    : activeCategory;
+
+  timelineKicker.textContent = isAllView
+    ? "Historique complet"
+    : "Historique par catégorie";
+
+  searchScopeTitle.textContent = isAllView
+    ? "Rechercher dans toutes les observations"
+    : "Rechercher dans la catégorie";
+
+  searchStatus.textContent = statusMessage;
 
   const filtersAreActive =
     Boolean(searchDateInput.value) ||
-    Boolean(
-      searchKeywordInput.value.trim(),
-    );
+    Boolean(searchKeywordInput.value.trim());
 
-  if (filtersAreActive) {
-    observationCount.textContent =
-      `${filteredObservations.length} / ${categoryTotal}`;
-  } else {
-    observationCount.textContent =
-      categoryTotal === 1
-        ? "1 observation"
-        : `${categoryTotal} observations`;
-  }
+  observationCount.textContent = filtersAreActive
+    ? `${filteredObservations.length} / ${scopeTotal}`
+    : scopeTotal === 1
+      ? "1 observation"
+      : `${scopeTotal} observations`;
 
-  if (
-    filteredObservations.length === 0
-  ) {
+  if (filteredObservations.length === 0) {
+    const filtersMessage = filtersAreActive
+      ? "Modifie les critères de recherche ou efface les filtres."
+      : "Ajoute une première observation pour commencer l’historique.";
+
     observationList.innerHTML = `
       <div class="empty-state">
         <h3>Aucun résultat</h3>
-
-        <p>
-          Modifie les critères de recherche
-          ou efface les filtres.
-        </p>
+        <p>${filtersMessage}</p>
       </div>
     `;
 
     return;
   }
 
-  observationList.innerHTML =
-    filteredObservations
-      .map(
-        (observation) => `
-          <article class="observation-card">
-            <div class="observation-card-header">
-              <div class="observation-heading">
-                <h3>
-                  ${escapeHtml(
-                    formatDate(
-                      observation.observedAt,
-                    ),
-                  )}
-                </h3>
+  observationList.innerHTML = filteredObservations
+    .map(
+      (observation) => `
+        <article class="observation-card">
+          <div class="observation-card-header">
+            <div class="observation-heading">
+              <h3>
+                ${escapeHtml(formatDate(observation.observedAt))}
+              </h3>
 
-                ${
-                  observation.context
-                    ? `
-                      <p class="context">
-                        ${escapeHtml(
-                          observation.context,
-                        )}
-                      </p>
-                    `
-                    : ""
-                }
-
-                ${
-                  observation.modifiedAt
-                    ? `
-                      <p class="modified-date">
-                        Modifiée le
-                        ${escapeHtml(
-                          formatShortDate(
-                            observation.modifiedAt,
-                          ),
-                        )}
-                      </p>
-                    `
-                    : ""
-                }
-              </div>
-
-              <div class="card-actions">
-                <button
-                  class="edit-button"
-                  type="button"
-                  data-edit-id="${escapeHtml(
-                    observation.id,
-                  )}"
-                >
-                  Modifier
-                </button>
-
-                <button
-                  class="delete-button"
-                  type="button"
-                  data-delete-id="${escapeHtml(
-                    observation.id,
-                  )}"
-                >
-                  Supprimer
-                </button>
-              </div>
-            </div>
-
-            <div class="observation-content">
-              <section>
-                <h4>Fait observé</h4>
-
-                <p>
-                  ${escapeHtml(
-                    observation.fact,
-                  )}
-                </p>
-              </section>
+              ${getObservationSubtitle(observation)}
 
               ${
-                observation.exactWords
+                observation.modifiedAt
                   ? `
-                    <section>
-                      <h4>
-                        Paroles exactes
-                      </h4>
-
-                      <blockquote>
-                        ${escapeHtml(
-                          observation.exactWords,
-                        )}
-                      </blockquote>
-                    </section>
-                  `
-                  : ""
-              }
-
-              ${
-                observation.interpretation
-                  ? `
-                    <section class="interpretation">
-                      <h4>
-                        Interprétation éventuelle
-                      </h4>
-
-                      <p>
-                        ${escapeHtml(
-                          observation.interpretation,
-                        )}
-                      </p>
-                    </section>
+                    <p class="modified-date">
+                      Modifiée le
+                      ${escapeHtml(
+                        formatShortDate(observation.modifiedAt),
+                      )}
+                    </p>
                   `
                   : ""
               }
             </div>
-          </article>
-        `,
-      )
-      .join("");
+
+            <div class="card-actions">
+              <button
+                class="edit-button"
+                type="button"
+                data-edit-id="${escapeHtml(observation.id)}"
+              >
+                Modifier
+              </button>
+
+              <button
+                class="delete-button"
+                type="button"
+                data-delete-id="${escapeHtml(observation.id)}"
+              >
+                Supprimer
+              </button>
+            </div>
+          </div>
+
+          <div class="observation-content">
+            <section>
+              <h4>Fait observé</h4>
+              <p>${escapeHtml(observation.fact)}</p>
+            </section>
+
+            ${
+              observation.exactWords
+                ? `
+                  <section>
+                    <h4>Paroles exactes</h4>
+                    <blockquote>
+                      ${escapeHtml(observation.exactWords)}
+                    </blockquote>
+                  </section>
+                `
+                : ""
+            }
+
+            ${
+              observation.interpretation
+                ? `
+                  <section class="interpretation">
+                    <h4>Interprétation éventuelle</h4>
+                    <p>
+                      ${escapeHtml(observation.interpretation)}
+                    </p>
+                  </section>
+                `
+                : ""
+            }
+          </div>
+        </article>
+      `,
+    )
+    .join("");
 
   document
-    .querySelectorAll<HTMLButtonElement>(
-      "[data-edit-id]",
-    )
+    .querySelectorAll<HTMLButtonElement>("[data-edit-id]")
     .forEach((button) => {
-      button.addEventListener(
-        "click",
-        () => {
-          const id =
-            button.dataset.editId;
+      button.addEventListener("click", () => {
+        const id = button.dataset.editId;
 
-          if (id) {
-            openEditObservationForm(id);
-          }
-        },
-      );
+        if (id) {
+          openEditObservationForm(id);
+        }
+      });
     });
 
   document
-    .querySelectorAll<HTMLButtonElement>(
-      "[data-delete-id]",
-    )
+    .querySelectorAll<HTMLButtonElement>("[data-delete-id]")
     .forEach((button) => {
-      button.addEventListener(
-        "click",
-        () => {
-          const id =
-            button.dataset.deleteId;
+      button.addEventListener("click", () => {
+        const id = button.dataset.deleteId;
 
-          if (id) {
-            deleteObservation(id);
-          }
-        },
-      );
+        if (id) {
+          deleteObservation(id);
+        }
+      });
     });
 }
 
@@ -1551,79 +1241,38 @@ function renderObservations(): void {
 
 function exportBackup(): void {
   const backup: BackupFile = {
-    application:
-      "La vie de Maia",
-
+    application: "La vie de Maia",
     version: 1,
-
-    exportedAt:
-      new Date().toISOString(),
-
-    observationCount:
-      observations.length,
-
+    exportedAt: new Date().toISOString(),
+    observationCount: observations.length,
     observations,
   };
 
-  const jsonContent =
-    JSON.stringify(
-      backup,
-      null,
-      2,
-    );
+  const jsonContent = JSON.stringify(backup, null, 2);
+  const blob = new Blob([jsonContent], {
+    type: "application/json;charset=utf-8",
+  });
 
-  const blob =
-    new Blob(
-      [jsonContent],
-      {
-        type:
-          "application/json;charset=utf-8",
-      },
-    );
+  const downloadUrl = URL.createObjectURL(blob);
+  const today = getLocalDateKey(new Date().toISOString());
+  const downloadLink = document.createElement("a");
 
-  const downloadUrl =
-    URL.createObjectURL(blob);
-
-  const today =
-    getLocalDateKey(
-      new Date().toISOString(),
-    );
-
-  const downloadLink =
-    document.createElement("a");
-
-  downloadLink.href =
-    downloadUrl;
-
-  downloadLink.download =
-    `la-vie-de-maia-sauvegarde-${today}.json`;
-
-  document.body.appendChild(
-    downloadLink,
-  );
-
+  downloadLink.href = downloadUrl;
+  downloadLink.download = `la-vie-de-maia-sauvegarde-${today}.json`;
+  document.body.appendChild(downloadLink);
   downloadLink.click();
   downloadLink.remove();
 
   window.setTimeout(() => {
-    URL.revokeObjectURL(
-      downloadUrl,
-    );
+    URL.revokeObjectURL(downloadUrl);
   }, 1000);
 
-  const initialText =
-    exportButton.textContent ??
-    "Exporter";
-
-  exportButton.textContent =
-    "Exporté ✓";
-
+  const initialText = exportButton.textContent ?? "Exporter";
+  exportButton.textContent = "Exporté ✓";
   exportButton.disabled = true;
 
   window.setTimeout(() => {
-    exportButton.textContent =
-      initialText;
-
+    exportButton.textContent = initialText;
     exportButton.disabled = false;
   }, 1500);
 }
@@ -1637,20 +1286,14 @@ function getImportedCategorySummary(
 ): string {
   return categories
     .map((category) => {
-      const count =
-        importedObservations.filter(
-          (observation) =>
-            observation.category ===
-            category,
-        ).length;
+      const count = importedObservations.filter(
+        (observation) => observation.category === category,
+      ).length;
 
       return count > 0
         ? `
           <div class="import-category-line">
-            <span>
-              ${escapeHtml(category)}
-            </span>
-
+            <span>${escapeHtml(category)}</span>
             <strong>${count}</strong>
           </div>
         `
@@ -1663,28 +1306,17 @@ function openImportDialog(
   fileName: string,
   importedObservations: Observation[],
 ): void {
-  pendingImportedObservations =
-    importedObservations;
+  pendingImportedObservations = importedObservations;
 
-  const existingIds =
-    new Set(
-      observations.map(
-        (observation) =>
-          observation.id,
-      ),
-    );
+  const existingIds = new Set(
+    observations.map((observation) => observation.id),
+  );
 
-  const duplicateCount =
-    importedObservations.filter(
-      (observation) =>
-        existingIds.has(
-          observation.id,
-        ),
-    ).length;
+  const duplicateCount = importedObservations.filter((observation) =>
+    existingIds.has(observation.id),
+  ).length;
 
-  const newCount =
-    importedObservations.length -
-    duplicateCount;
+  const newCount = importedObservations.length - duplicateCount;
 
   importSummary.textContent =
     `${fileName} contient ` +
@@ -1709,51 +1341,31 @@ function openImportDialog(
     </div>
 
     <div class="import-category-summary">
-      ${getImportedCategorySummary(
-        importedObservations,
-      )}
+      ${getImportedCategorySummary(importedObservations)}
     </div>
   `;
 
-  importDialog.classList.remove(
-    "hidden",
-  );
+  importDialog.classList.remove("hidden");
 }
 
 function closeImportDialog(): void {
   pendingImportedObservations = [];
-
-  importDialog.classList.add(
-    "hidden",
-  );
+  importDialog.classList.add("hidden");
 }
 
-async function handleImportFile(
-  file: File,
-): Promise<void> {
-  if (
-    file.size > MAX_IMPORT_SIZE
-  ) {
+async function handleImportFile(file: File): Promise<void> {
+  if (file.size > MAX_IMPORT_SIZE) {
     window.alert(
       "Le fichier est trop volumineux. Taille maximale : 10 Mo.",
     );
-
     return;
   }
 
   try {
-    const fileContent =
-      await file.text();
+    const fileContent = await file.text();
+    const importedObservations = parseBackupFile(fileContent);
 
-    const importedObservations =
-      parseBackupFile(
-        fileContent,
-      );
-
-    openImportDialog(
-      file.name,
-      importedObservations,
-    );
+    openImportDialog(file.name, importedObservations);
   } catch (error) {
     const message =
       error instanceof Error
@@ -1773,48 +1385,40 @@ function completeImport(): void {
   clearSearchFilters();
   closeForm();
   closeImportDialog();
-
   renderCategoryNavigation();
   renderObservations();
 }
 
 function importByMerging(): void {
-  const mergeResult =
-    mergeObservations(
-      observations,
-      pendingImportedObservations,
-    );
+  const mergeResult = mergeObservations(
+    observations,
+    pendingImportedObservations,
+  );
 
-  observations =
-    mergeResult.observations;
-
+  observations = mergeResult.observations;
   saveObservations(observations);
   completeImport();
 
   window.alert(
     "Import terminé.\n\n" +
-    `Ajoutées : ${mergeResult.added}\n` +
-    `Mises à jour : ${mergeResult.updated}\n` +
-    `Inchangées : ${mergeResult.unchanged}`,
+      `Ajoutées : ${mergeResult.added}\n` +
+      `Mises à jour : ${mergeResult.updated}\n` +
+      `Inchangées : ${mergeResult.unchanged}`,
   );
 }
 
 function importByReplacing(): void {
-  const confirmed =
-    window.confirm(
-      "Toutes les observations actuellement présentes seront " +
+  const confirmed = window.confirm(
+    "Toutes les observations actuellement présentes seront " +
       "supprimées et remplacées par le contenu de la sauvegarde.\n\n" +
       "Cette action est irréversible. Continuer ?",
-    );
+  );
 
   if (!confirmed) {
     return;
   }
 
-  observations = [
-    ...pendingImportedObservations,
-  ];
-
+  observations = [...pendingImportedObservations];
   saveObservations(observations);
   completeImport();
 
@@ -1828,231 +1432,131 @@ function importByReplacing(): void {
 /*------------------------------------------------*/
 
 document
-  .querySelector<HTMLButtonElement>(
-    "#open-form-button",
-  )!
-  .addEventListener(
-    "click",
-    openNewObservationForm,
-  );
+  .querySelector<HTMLButtonElement>("#open-form-button")!
+  .addEventListener("click", openNewObservationForm);
 
 document
-  .querySelector<HTMLButtonElement>(
-    "#close-form-button",
-  )!
-  .addEventListener(
-    "click",
-    closeForm,
-  );
+  .querySelector<HTMLButtonElement>("#close-form-button")!
+  .addEventListener("click", closeForm);
 
 document
-  .querySelector<HTMLButtonElement>(
-    "#cancel-form-button",
-  )!
-  .addEventListener(
-    "click",
-    closeForm,
-  );
+  .querySelector<HTMLButtonElement>("#cancel-form-button")!
+  .addEventListener("click", closeForm);
 
 document
-  .querySelector<HTMLButtonElement>(
-    "#clear-filters-button",
-  )!
-  .addEventListener(
-    "click",
-    () => {
-      clearSearchFilters();
-      renderObservations();
-    },
-  );
-
-document
-  .querySelector<HTMLButtonElement>(
-    "#merge-import-button",
-  )!
-  .addEventListener(
-    "click",
-    importByMerging,
-  );
-
-document
-  .querySelector<HTMLButtonElement>(
-    "#replace-import-button",
-  )!
-  .addEventListener(
-    "click",
-    importByReplacing,
-  );
-
-document
-  .querySelector<HTMLButtonElement>(
-    "#cancel-import-button",
-  )!
-  .addEventListener(
-    "click",
-    closeImportDialog,
-  );
-
-exportButton.addEventListener(
-  "click",
-  exportBackup,
-);
-
-importButton.addEventListener(
-  "click",
-  () => {
-    importFileInput.value = "";
-    importFileInput.click();
-  },
-);
-
-importFileInput.addEventListener(
-  "change",
-  () => {
-    const selectedFile =
-      importFileInput.files?.[0];
-
-    if (selectedFile) {
-      void handleImportFile(
-        selectedFile,
-      );
-    }
-  },
-);
-
-importDialog.addEventListener(
-  "click",
-  (event) => {
-    if (
-      event.target === importDialog
-    ) {
-      closeImportDialog();
-    }
-  },
-);
-
-searchDateInput.addEventListener(
-  "change",
-  renderObservations,
-);
-
-searchKeywordInput.addEventListener(
-  "input",
-  renderObservations,
-);
-
-observationForm.addEventListener(
-  "submit",
-  (event) => {
-    event.preventDefault();
-
-    const formData =
-      new FormData(
-        observationForm,
-      );
-
-    const fact =
-      String(
-        formData.get("fact") ?? "",
-      ).trim();
-
-    if (!fact) {
-      return;
-    }
-
-    const category =
-      String(
-        formData.get("category"),
-      ) as Category;
-
-    const observedAt =
-      new Date(
-        String(
-          formData.get(
-            "observedAt",
-          ),
-        ),
-      ).toISOString();
-
-    const context =
-      String(
-        formData.get(
-          "context",
-        ) ?? "",
-      ).trim();
-
-    const exactWords =
-      String(
-        formData.get(
-          "exactWords",
-        ) ?? "",
-      ).trim();
-
-    const interpretation =
-      String(
-        formData.get(
-          "interpretation",
-        ) ?? "",
-      ).trim();
-
-    if (editingObservationId) {
-      observations =
-        observations.map(
-          (observation) => {
-            if (
-              observation.id !==
-              editingObservationId
-            ) {
-              return observation;
-            }
-
-            return {
-              ...observation,
-              observedAt,
-              modifiedAt:
-                new Date().toISOString(),
-              category,
-              context,
-              fact,
-              exactWords,
-              interpretation,
-            };
-          },
-        );
-    } else {
-      const observation:
-        Observation = {
-          id: createId(),
-
-          observedAt,
-
-          createdAt:
-            new Date().toISOString(),
-
-          category,
-          context,
-          fact,
-          exactWords,
-          interpretation,
-        };
-
-      observations.push(
-        observation,
-      );
-    }
-
-    activeCategory =
-      category;
-
-    saveObservations(
-      observations,
-    );
-
-    renderCategoryNavigation();
+  .querySelector<HTMLButtonElement>("#clear-filters-button")!
+  .addEventListener("click", () => {
+    clearSearchFilters();
     renderObservations();
-    closeForm();
-  },
-);
+  });
+
+document
+  .querySelector<HTMLButtonElement>("#merge-import-button")!
+  .addEventListener("click", importByMerging);
+
+document
+  .querySelector<HTMLButtonElement>("#replace-import-button")!
+  .addEventListener("click", importByReplacing);
+
+document
+  .querySelector<HTMLButtonElement>("#cancel-import-button")!
+  .addEventListener("click", closeImportDialog);
+
+exportButton.addEventListener("click", exportBackup);
+
+importButton.addEventListener("click", () => {
+  importFileInput.value = "";
+  importFileInput.click();
+});
+
+importFileInput.addEventListener("change", () => {
+  const selectedFile = importFileInput.files?.[0];
+
+  if (selectedFile) {
+    void handleImportFile(selectedFile);
+  }
+});
+
+importDialog.addEventListener("click", (event) => {
+  if (event.target === importDialog) {
+    closeImportDialog();
+  }
+});
+
+searchDateInput.addEventListener("change", renderObservations);
+searchKeywordInput.addEventListener("input", renderObservations);
+
+observationForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+
+  const formData = new FormData(observationForm);
+  const fact = String(formData.get("fact") ?? "").trim();
+
+  if (!fact) {
+    return;
+  }
+
+  const categoryValue = String(formData.get("category") ?? "");
+
+  if (!isObservationCategory(categoryValue)) {
+    return;
+  }
+
+  const observedAtValue = String(formData.get("observedAt") ?? "");
+  const observedAtDate = new Date(observedAtValue);
+
+  if (Number.isNaN(observedAtDate.getTime())) {
+    return;
+  }
+
+  const category = categoryValue;
+  const observedAt = observedAtDate.toISOString();
+  const context = String(formData.get("context") ?? "").trim();
+  const exactWords = String(
+    formData.get("exactWords") ?? "",
+  ).trim();
+  const interpretation = String(
+    formData.get("interpretation") ?? "",
+  ).trim();
+
+  if (editingObservationId) {
+    observations = observations.map((observation) => {
+      if (observation.id !== editingObservationId) {
+        return observation;
+      }
+
+      return {
+        ...observation,
+        observedAt,
+        modifiedAt: new Date().toISOString(),
+        category,
+        context,
+        fact,
+        exactWords,
+        interpretation,
+      };
+    });
+  } else {
+    observations.push({
+      id: createId(),
+      observedAt,
+      createdAt: new Date().toISOString(),
+      category,
+      context,
+      fact,
+      exactWords,
+      interpretation,
+    });
+  }
+
+  activeCategory =
+    formReturnCategory === "Tout" ? "Tout" : category;
+
+  saveObservations(observations);
+  renderCategoryNavigation();
+  renderObservations();
+  closeForm();
+});
 
 /*------------------------------------------------*/
 /* Démarrage                                      */
